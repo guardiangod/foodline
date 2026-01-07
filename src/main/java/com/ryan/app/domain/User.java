@@ -1,5 +1,7 @@
 package com.ryan.app.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -19,6 +21,8 @@ public class User {
     private String lastName;
     private String email;
     private String phoneNumber;
+
+    @JsonIgnore
     private Cart cart;
 
 }

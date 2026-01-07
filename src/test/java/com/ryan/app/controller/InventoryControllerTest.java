@@ -9,24 +9,18 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 
-import com.ryan.app.controller.InventoryController;
-
 @WebMvcTest(InventoryController.class)
 class InventoryControllerTest {
 
     @Autowired
     private MockMvc mockMvc;
 
-
-
     @Test
     void shouldReturnTheHealthOfTheStore() throws Exception {
         String getUrl = "/inventory/health?storeId={storeId}";
-        //add required mocking.
-        mockMvc.perform(MockMvcRequestBuilders.get(getUrl,"store101")
-                            .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk());
-        //put meaning assertions
 
+        mockMvc.perform(MockMvcRequestBuilders.get(getUrl, "store101")
+                .contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isOk());
     }
 }
