@@ -1,21 +1,29 @@
 package com.ryan.app.service;
 
-import java.util.List;
-
 import org.springframework.stereotype.Service;
 
 import com.ryan.app.domain.FoodMenuItem;
-import com.ryan.app.seedData.SeedData;
+import com.ryan.app.domain.Restaurant;
+import com.ryan.app.persistence.repo.FoodMenuItemRepository;
+
+import lombok.RequiredArgsConstructor;
 
 @Service
+@RequiredArgsConstructor
 public class FoodMenuService {
 
-    private final List<FoodMenuItem> items = SeedData.foodMenuItems;
+    private final FoodMenuItemRepository foodMenuItemRepository;
 
-    public FoodMenuItem getMenuItem(String itemId, String restaurantId) {
-        return items.stream()
-            .filter(it -> it.getProductId().equals(itemId) && restaurantId.equals(it.getOutletId()))
-            .findFirst()
-            .orElse(null);
+    public FoodMenuItem getMenuItem(String itemId, String outletId) {
+        var entity = foodMenuItemRepository.findByMenuItemIdAndRestaurant_OutletId(itemId, outletId).orElse(null);
+        if (entity == null) {
+            return null;
+        }
+
+        var restaurant = new Restaurant();
+        restaurant.setOutletId(entity.getRestaurant().getOutletId());
+        restaurant.setOutletName(entity.getRestaurant().getName());
+
+        return new FoodMenuItem(entity.getMenuItemId(), entity.getName(), entity.getPrice(), restaurant);
     }
 }

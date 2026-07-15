@@ -1,23 +1,29 @@
 package com.ryan.app.service;
 
-import java.util.Map;
+import java.util.Optional;
 
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.ryan.app.domain.Cart;
 import com.ryan.app.domain.CartItem;
 import com.ryan.app.domain.CatalogType;
 import com.ryan.app.domain.FoodMenuItem;
 import com.ryan.app.domain.GroceryProduct;
+import com.ryan.app.domain.GroceryStore;
 import com.ryan.app.domain.Outlet;
-import com.ryan.app.domain.User;
+import com.ryan.app.domain.Restaurant;
 import com.ryan.app.dto.request.AddItemRequest;
 import com.ryan.app.dto.request.AddProductRequest;
 import com.ryan.app.dto.response.AddItemResponse;
 import com.ryan.app.dto.response.CartProductInfo;
 import com.ryan.app.exception.CartConflictException;
-import com.ryan.app.seedData.SeedData;
+import com.ryan.app.persistence.entity.CartEntity;
+import com.ryan.app.persistence.entity.CartItemEntity;
+import com.ryan.app.persistence.repo.CartRepository;
+import com.ryan.app.persistence.repo.OutletRepository;
+
+import lombok.RequiredArgsConstructor;
 
 @Service
 @RequiredArgsConstructor
@@ -27,122 +33,154 @@ public class CartService {
     private final ProductService productService;
     private final FoodMenuService foodMenuService;
 
-    private final Map<String, Cart> userCarts = SeedData.cartForUsers;
+    private final CartRepository cartRepository;
+    private final OutletRepository outletRepository;
 
     /**
      * Backwards-compatible grocery-only endpoint support.
      */
+    @Transactional
     public CartProductInfo addProductToCartForUser(AddProductRequest addProductRequest) {
         var req = new AddItemRequest();
         req.setUserId(addProductRequest.getUserId());
         req.setOutletId(addProductRequest.getOutletId());
-        req.setCatalogType(CatalogType.GROCERY);
         req.setItemId(addProductRequest.getProductId());
+        req.setCatalogType(CatalogType.GROCERY);
         req.setQuantity(1);
         req.setOverrideExistingCart(false);
 
-        var response = addItemToCartForUser(req);
-        // Keep legacy response shape.
-        GroceryProduct product = productService.getProduct(addProductRequest.getProductId(), addProductRequest.getOutletId());
-        return new CartProductInfo(response.cart(), product, product != null ? product.getSellingPrice() : null);
+        var resp = addItemToCartForUser(req);
+
+        // Legacy response shape: include the resolved grocery product.
+        var product = productService.getProduct(addProductRequest.getProductId(), addProductRequest.getOutletId());
+        return new CartProductInfo(resp.cart(), product, product != null ? product.getSellingPrice() : null);
     }
 
+    @Transactional
     public AddItemResponse addItemToCartForUser(AddItemRequest request) {
-        User user = userService.fetchUserById(request.getUserId());
-        Cart cart = fetchOrCreateCartForUser(user);
-
-        validateOrOverrideCart(cart, request);
-
-        CartItem added = switch (request.getCatalogType()) {
-            case GROCERY -> addGroceryItem(cart, request);
-            case FOOD -> addFoodItem(cart, request);
-        };
-
-        return new AddItemResponse(cart, added);
-    }
-
-    public Cart getCartForUser(String userId) {
-        User user = userService.fetchUserById(userId);
-        return fetchOrCreateCartForUser(user);
-    }
-
-    private Cart fetchOrCreateCartForUser(User user) {
-        return userCarts.computeIfAbsent(user.getUserId(), uid -> SeedData.createEmptyCartForUser(user, "cart-" + uid));
-    }
-
-    private void validateOrOverrideCart(Cart cart, AddItemRequest request) {
-        boolean cartInitialized = cart.getCatalogType() != null && cart.getOutlet() != null && !cart.isEmpty();
-
-        if (!cartInitialized) {
-            // First item defines the cart.
-            cart.setCatalogType(request.getCatalogType());
-            cart.setOutlet(resolveOutlet(request));
-            return;
+        var user = userService.fetchUserById(request.getUserId());
+        if (user == null) {
+            return new AddItemResponse(null, null);
         }
 
-        boolean sameType = cart.getCatalogType() == request.getCatalogType();
-        boolean sameOutlet = cart.getOutlet() != null && cart.getOutlet().getOutletId().equals(request.getOutletId());
+        var cart = cartRepository.findByUser_UserId(request.getUserId())
+            .orElseGet(() -> cartRepository.save(new CartEntity("cart_" + request.getUserId(), user)));
 
-        if (sameType && sameOutlet) {
-            return;
+        var requestedType = request.getCatalogType();
+        var requestedOutletId = request.getOutletId();
+
+        boolean cartHasType = cart.getCatalogType() != null;
+        boolean cartHasOutlet = cart.getOutlet() != null;
+
+        boolean conflict = (cartHasType && requestedType != cart.getCatalogType())
+            || (cartHasOutlet && requestedOutletId != null && !requestedOutletId.equals(cart.getOutlet().getOutletId()));
+
+        if (conflict && !request.isOverrideExistingCart()) {
+            throw new CartConflictException(toDomain(cart), requestedType, requestedOutletId);
         }
 
-        if (!request.isOverrideExistingCart()) {
-            throw new CartConflictException(cart, request.getCatalogType(), request.getOutletId());
+        if (conflict && request.isOverrideExistingCart()) {
+            cart.getItems().clear();
+            cart.setCatalogType(null);
+            cart.setOutlet(null);
         }
 
-        // Override: clear & re-initialize
-        cart.getItems().clear();
-        cart.setCatalogType(request.getCatalogType());
-        cart.setOutlet(resolveOutlet(request));
-    }
+        if (cart.getCatalogType() == null) {
+            cart.setCatalogType(requestedType);
+        }
+        if (cart.getOutlet() == null) {
+            var outlet = outletRepository.findById(requestedOutletId).orElse(null);
+            if (outlet == null) {
+                return new AddItemResponse(null, null);
+            }
+            cart.setOutlet(outlet);
+        }
 
-    private Outlet resolveOutlet(AddItemRequest request) {
-        // For this kata we only support in-memory seed outlets.
-        // In a DB-backed version, you'd fetch from repository.
-        if (request.getCatalogType() == CatalogType.GROCERY) {
-            if (SeedData.store101.getOutletId().equals(request.getOutletId())) return SeedData.store101;
-            if (SeedData.store102.getOutletId().equals(request.getOutletId())) return SeedData.store102;
+        var qty = request.getQuantity() <= 0 ? 1 : request.getQuantity();
+
+        String name;
+        java.math.BigDecimal unitPrice;
+
+        if (requestedType == CatalogType.GROCERY) {
+            GroceryProduct gp = productService.getProduct(request.getItemId(), requestedOutletId);
+            if (gp == null) return new AddItemResponse(null, null);
+            name = gp.getProductName();
+            unitPrice = gp.getSellingPrice() != null ? gp.getSellingPrice() : gp.getMrp();
         } else {
-            if (SeedData.restaurant201.getOutletId().equals(request.getOutletId())) return SeedData.restaurant201;
-            if (SeedData.restaurant202.getOutletId().equals(request.getOutletId())) return SeedData.restaurant202;
-        }
-        return null;
-    }
-
-    private CartItem addGroceryItem(Cart cart, AddItemRequest request) {
-        GroceryProduct product = productService.getProduct(request.getItemId(), request.getOutletId());
-        if (product == null) {
-            throw new IllegalArgumentException("Grocery product not found for outletId=" + request.getOutletId() + ", productId=" + request.getItemId());
+            FoodMenuItem mi = foodMenuService.getMenuItem(request.getItemId(), requestedOutletId);
+            if (mi == null) return new AddItemResponse(null, null);
+            name = mi.getProductName();
+            unitPrice = mi.getPrice();
         }
 
-        CartItem item = CartItem.builder()
-            .itemId(product.getProductId())
-            .name(product.getProductName())
-            .unitPrice(product.getSellingPrice())
-            .quantity(Math.max(1, request.getQuantity()))
-            .catalogType(CatalogType.GROCERY)
+        Optional<CartItemEntity> existing = cart.getItems().stream()
+            .filter(i -> i.getItemId().equals(request.getItemId()) && i.getCatalogType() == requestedType)
+            .findFirst();
+
+        CartItemEntity addedEntity;
+        if (existing.isPresent()) {
+            addedEntity = existing.get();
+            addedEntity.setQuantity(addedEntity.getQuantity() + qty);
+        } else {
+            addedEntity = new CartItemEntity(cart, request.getItemId(), name, unitPrice, qty, requestedType);
+            cart.getItems().add(addedEntity);
+        }
+
+        cartRepository.save(cart);
+
+        var domainCart = toDomain(cart);
+        var addedItem = CartItem.builder()
+            .itemId(addedEntity.getItemId())
+            .name(addedEntity.getName())
+            .unitPrice(addedEntity.getUnitPrice())
+            .quantity(addedEntity.getQuantity())
+            .catalogType(addedEntity.getCatalogType())
             .build();
 
-        cart.getItems().add(item);
-        return item;
+        return new AddItemResponse(domainCart, addedItem);
     }
 
-    private CartItem addFoodItem(Cart cart, AddItemRequest request) {
-        FoodMenuItem menuItem = foodMenuService.getMenuItem(request.getItemId(), request.getOutletId());
-        if (menuItem == null) {
-            throw new IllegalArgumentException("Food menu item not found for outletId=" + request.getOutletId() + ", itemId=" + request.getItemId());
+    @Transactional(readOnly = true)
+    public Cart getCartForUser(String userId) {
+        return cartRepository.findByUser_UserId(userId).map(this::toDomain).orElse(null);
+    }
+
+    private Cart toDomain(CartEntity entity) {
+        if (entity == null) return null;
+
+        Outlet outlet = null;
+        if (entity.getOutlet() != null) {
+            if (entity.getOutlet().getOutletType() != null && entity.getOutlet().getOutletType().name().contains("RESTAURANT")) {
+                var r = new Restaurant();
+                r.setOutletId(entity.getOutlet().getOutletId());
+                r.setOutletName(entity.getOutlet().getName());
+                outlet = r;
+            } else {
+                var s = new GroceryStore();
+                s.setOutletId(entity.getOutlet().getOutletId());
+                s.setOutletName(entity.getOutlet().getName());
+                outlet = s;
+            }
         }
 
-        CartItem item = CartItem.builder()
-            .itemId(menuItem.getProductId())
-            .name(menuItem.getProductName())
-            .unitPrice(menuItem.getPrice())
-            .quantity(Math.max(1, request.getQuantity()))
-            .catalogType(CatalogType.FOOD)
+        var cart = Cart.builder()
+            .cartId(entity.getCartId())
+            .userId(entity.getUser().getUserId())
+            .catalogType(entity.getCatalogType())
+            .outlet(outlet)
             .build();
 
-        cart.getItems().add(item);
-        return item;
+        if (entity.getItems() != null) {
+            for (var item : entity.getItems()) {
+                cart.getItems().add(CartItem.builder()
+                    .itemId(item.getItemId())
+                    .name(item.getName())
+                    .unitPrice(item.getUnitPrice())
+                    .quantity(item.getQuantity())
+                    .catalogType(item.getCatalogType())
+                    .build());
+            }
+        }
+        return cart;
     }
 }

@@ -20,6 +20,8 @@ public class Cart {
 
     private String cartId;
 
+    private String userId;
+
     /** The cart belongs to exactly one outlet at a time (store OR restaurant). */
     private Outlet outlet;
 
