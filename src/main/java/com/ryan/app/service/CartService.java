@@ -5,18 +5,17 @@ import java.util.Optional;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import com.ryan.app.domain.Cart;
-import com.ryan.app.domain.CartItem;
 import com.ryan.app.domain.CatalogType;
 import com.ryan.app.domain.FoodMenuItem;
 import com.ryan.app.domain.GroceryProduct;
-import com.ryan.app.domain.GroceryStore;
-import com.ryan.app.domain.Outlet;
-import com.ryan.app.domain.Restaurant;
 import com.ryan.app.dto.request.AddItemRequest;
 import com.ryan.app.dto.request.AddProductRequest;
 import com.ryan.app.dto.response.AddItemResponse;
+import com.ryan.app.dto.response.CartItemResponse;
+import com.ryan.app.dto.response.CartResponse;
 import com.ryan.app.dto.response.CartProductInfo;
+import com.ryan.app.dto.response.OutletResponse;
+import com.ryan.app.dto.response.ProductResponse;
 import com.ryan.app.exception.CartConflictException;
 import com.ryan.app.persistence.entity.CartEntity;
 import com.ryan.app.persistence.entity.CartItemEntity;
@@ -51,9 +50,17 @@ public class CartService {
 
         var resp = addItemToCartForUser(req);
 
-        // Legacy response shape: include the resolved grocery product.
+        // Legacy response shape: include the resolved grocery product (DTO).
         var product = productService.getProduct(addProductRequest.getProductId(), addProductRequest.getOutletId());
-        return new CartProductInfo(resp.cart(), product, product != null ? product.getSellingPrice() : null);
+        var unitPrice = product != null ? (product.getSellingPrice() != null ? product.getSellingPrice() : product.getMrp()) : null;
+        var pr = ProductResponse.builder()
+            .itemId(addProductRequest.getProductId())
+            .name(product != null ? product.getProductName() : null)
+            .unitPrice(unitPrice)
+            .catalogType(CatalogType.GROCERY)
+            .outletId(addProductRequest.getOutletId())
+            .build();
+        return new CartProductInfo(resp.cart(), pr, product != null ? product.getSellingPrice() : null);
     }
 
     @Transactional
@@ -76,7 +83,12 @@ public class CartService {
             || (cartHasOutlet && requestedOutletId != null && !requestedOutletId.equals(cart.getOutlet().getOutletId()));
 
         if (conflict && !request.isOverrideExistingCart()) {
-            throw new CartConflictException(toDomain(cart), requestedType, requestedOutletId);
+            throw new CartConflictException(
+                cart.getCatalogType(),
+                cart.getOutlet() != null ? cart.getOutlet().getOutletId() : null,
+                requestedType,
+                requestedOutletId
+            );
         }
 
         if (conflict && request.isOverrideExistingCart()) {
@@ -128,8 +140,8 @@ public class CartService {
 
         cartRepository.save(cart);
 
-        var domainCart = toDomain(cart);
-        var addedItem = CartItem.builder()
+        var cartDto = toCartResponse(cart);
+        var addedItem = CartItemResponse.builder()
             .itemId(addedEntity.getItemId())
             .name(addedEntity.getName())
             .unitPrice(addedEntity.getUnitPrice())
@@ -137,33 +149,27 @@ public class CartService {
             .catalogType(addedEntity.getCatalogType())
             .build();
 
-        return new AddItemResponse(domainCart, addedItem);
+        return new AddItemResponse(cartDto, addedItem);
     }
 
     @Transactional(readOnly = true)
-    public Cart getCartForUser(String userId) {
-        return cartRepository.findByUser_UserId(userId).map(this::toDomain).orElse(null);
+    public CartResponse getCartForUser(String userId) {
+        return cartRepository.findByUser_UserId(userId).map(this::toCartResponse).orElse(null);
     }
 
-    private Cart toDomain(CartEntity entity) {
+    private CartResponse toCartResponse(CartEntity entity) {
         if (entity == null) return null;
 
-        Outlet outlet = null;
+        OutletResponse outlet = null;
         if (entity.getOutlet() != null) {
-            if (entity.getOutlet().getOutletType() != null && entity.getOutlet().getOutletType().name().contains("RESTAURANT")) {
-                var r = new Restaurant();
-                r.setOutletId(entity.getOutlet().getOutletId());
-                r.setOutletName(entity.getOutlet().getName());
-                outlet = r;
-            } else {
-                var s = new GroceryStore();
-                s.setOutletId(entity.getOutlet().getOutletId());
-                s.setOutletName(entity.getOutlet().getName());
-                outlet = s;
-            }
+            outlet = OutletResponse.builder()
+                .outletId(entity.getOutlet().getOutletId())
+                .name(entity.getOutlet().getName())
+                .outletType(entity.getOutlet().getOutletType())
+                .build();
         }
 
-        var cart = Cart.builder()
+        var cart = CartResponse.builder()
             .cartId(entity.getCartId())
             .userId(entity.getUser().getUserId())
             .catalogType(entity.getCatalogType())
@@ -172,15 +178,19 @@ public class CartService {
 
         if (entity.getItems() != null) {
             for (var item : entity.getItems()) {
-                cart.getItems().add(CartItem.builder()
-                    .itemId(item.getItemId())
-                    .name(item.getName())
-                    .unitPrice(item.getUnitPrice())
-                    .quantity(item.getQuantity())
-                    .catalogType(item.getCatalogType())
-                    .build());
+                cart.getItems().add(toCartItemResponse(item));
             }
         }
         return cart;
+    }
+
+    private CartItemResponse toCartItemResponse(CartItemEntity item) {
+        return CartItemResponse.builder()
+            .itemId(item.getItemId())
+            .name(item.getName())
+            .unitPrice(item.getUnitPrice())
+            .quantity(item.getQuantity())
+            .catalogType(item.getCatalogType())
+            .build();
     }
 }

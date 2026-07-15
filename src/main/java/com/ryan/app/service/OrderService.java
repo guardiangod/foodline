@@ -7,7 +7,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.ryan.app.domain.CatalogType;
 import com.ryan.app.dto.response.CheckoutResponse;
+import com.ryan.app.dto.response.OrderResponse;
 import com.ryan.app.dto.response.OrderItemResponse;
+import com.ryan.app.dto.response.OrderSummaryResponse;
 import com.ryan.app.persistence.entity.OrderEntity;
 import com.ryan.app.persistence.entity.OrderItemEntity;
 import com.ryan.app.persistence.entity.OrderStatus;
@@ -128,6 +130,24 @@ public class OrderService {
         return resp;
     }
 
+    @Transactional(readOnly = true)
+    public OrderResponse getOrderById(String orderId) {
+        return orderRepository.findById(orderId).map(this::toOrderResponse).orElse(null);
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<OrderSummaryResponse> listOrders(String userId) {
+        var orders = (userId == null || userId.isBlank())
+            ? orderRepository.findAllByOrderByCreatedAtDesc()
+            : orderRepository.findByUser_UserIdOrderByCreatedAtDesc(userId);
+
+        var results = new java.util.ArrayList<OrderSummaryResponse>(orders.size());
+        for (var o : orders) {
+            results.add(toOrderSummaryResponse(o));
+        }
+        return results;
+    }
+
     private com.ryan.app.persistence.entity.OutletEntity assignOutlet(com.ryan.app.persistence.entity.CartEntity cart) {
         if (cart.getCatalogType() == CatalogType.FOOD) {
             // Food: restaurant is user-selected (cart outlet).
@@ -154,5 +174,44 @@ public class OrderService {
             if (ok) return store;
         }
         return cart.getOutlet();
+    }
+
+    private OrderResponse toOrderResponse(OrderEntity entity) {
+        if (entity == null) return null;
+        var resp = OrderResponse.builder()
+            .orderId(entity.getOrderId())
+            .userId(entity.getUser().getUserId())
+            .outletId(entity.getOutlet().getOutletId())
+            .assignedOutletId(entity.getAssignedOutlet().getOutletId())
+            .catalogType(entity.getCatalogType())
+            .status(entity.getStatus())
+            .createdAt(entity.getCreatedAt())
+            .build();
+
+        if (entity.getItems() != null) {
+            for (var oi : entity.getItems()) {
+                resp.getItems().add(OrderItemResponse.builder()
+                    .itemId(oi.getItemId())
+                    .name(oi.getName())
+                    .unitPrice(oi.getUnitPrice())
+                    .quantity(oi.getQuantity())
+                    .catalogType(oi.getCatalogType())
+                    .build());
+            }
+        }
+        return resp;
+    }
+
+    private OrderSummaryResponse toOrderSummaryResponse(OrderEntity entity) {
+        return OrderSummaryResponse.builder()
+            .orderId(entity.getOrderId())
+            .userId(entity.getUser().getUserId())
+            .outletId(entity.getOutlet().getOutletId())
+            .assignedOutletId(entity.getAssignedOutlet().getOutletId())
+            .catalogType(entity.getCatalogType())
+            .status(entity.getStatus())
+            .createdAt(entity.getCreatedAt())
+            .itemCount(entity.getItems() != null ? entity.getItems().size() : 0)
+            .build();
     }
 }

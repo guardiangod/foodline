@@ -5,11 +5,10 @@ import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.ryan.app.domain.Cart;
 import com.ryan.app.domain.CatalogType;
-import com.ryan.app.domain.GroceryStore;
 import com.ryan.app.dto.request.AddItemRequest;
 import com.ryan.app.dto.response.AddItemResponse;
+import com.ryan.app.dto.response.CartResponse;
 import com.ryan.app.exception.ApiExceptionHandler;
 import com.ryan.app.exception.CartConflictException;
 import com.ryan.app.service.CartService;
@@ -41,9 +40,7 @@ class CartControllerTest {
         String url = "/cart/view?userId={userId}";
         String userId = "user101";
 
-        Cart cart = Cart.builder()
-            .cartId("cart101")
-            .build();
+        CartResponse cart = CartResponse.builder().cartId("cart101").build();
 
         when(cartService.getCartForUser(userId)).thenReturn(cart);
 
@@ -55,15 +52,8 @@ class CartControllerTest {
 
     @Test
     void shouldReturn409WhenCartConflictOccurs() throws Exception {
-        GroceryStore store = GroceryStore.builder().outletId("store101").name("Fresh Picks").build();
-        Cart existing = Cart.builder()
-            .cartId("cart101")
-            .catalogType(CatalogType.GROCERY)
-            .outlet(store)
-            .build();
-
         when(cartService.addItemToCartForUser(any(AddItemRequest.class)))
-            .thenThrow(new CartConflictException(existing, CatalogType.FOOD, "rest201"));
+            .thenThrow(new CartConflictException(CatalogType.GROCERY, "store101", CatalogType.FOOD, "rest201"));
 
         AddItemRequest req = new AddItemRequest();
         req.setUserId("user101");
@@ -84,7 +74,7 @@ class CartControllerTest {
 
     @Test
     void shouldReturn200ForAddItem() throws Exception {
-        Cart cart = Cart.builder().cartId("cart101").catalogType(CatalogType.GROCERY).build();
+        CartResponse cart = CartResponse.builder().cartId("cart101").catalogType(CatalogType.GROCERY).build();
         var response = new AddItemResponse(cart, null);
 
         when(cartService.addItemToCartForUser(any(AddItemRequest.class))).thenReturn(response);

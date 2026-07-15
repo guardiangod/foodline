@@ -1,216 +1,198 @@
-# Welcome to FoodLine
-FoodLine is built for real life. For the young professional who gets home late and doesn’t have the energy to cook. For the student with an exam tomorrow and an empty fridge tonight. These aren’t exceptions — they’re everyday moments. That’s why FoodLine brings food and groceries to your door, fast, fresh, and right when you need them.
+# FoodLine (Backend Service)
 
-Customers struggle with:
+FoodLine is a Spring Boot backend for a **food + grocery delivery** platform.
 
-- Cluttered browsing experiences that don’t understand their preferences.
-- Limited customization when ordering meals or groceries.
-- Unclear order status or delivery timelines.
-- Poor payment experience, or failed checkouts.
-- Lack of timely feedback channels to report a bad experience or appreciate a good one.
+This project intentionally keeps the domain small, but implements the key rules:
 
-FoodLine was built not just as another delivery app, but as a thoughtful, technology-first platform that reimagines how essentials reach customers in the most seamless way.
+* **Two catalog types**: `GROCERY` (inventory-driven) and `FOOD` (menu-driven)
+* **One cart = one outlet + one catalog type**
+  * If you try to add an item from a different outlet/type, the API returns **409** and asks you to confirm an override.
+* **Checkout** creates an order and performs fulfillment:
+  * `GROCERY`: reduces stock **only** in the assigned store
+  * `FOOD`: **no stock updates**
 
-# Introducing FoodLine
+---
 
-FoodLine, launched in 2026, is a hyperlocal delivery app designed to bring food and groceries to your doorstep in under 45 minutes. With the tagline "Speed meets convenience", it connects customers to nearby restaurants and stores through a seamless digital experience. The app solves the hassle of long wait times and limited local options by offering real-time tracking, instant order updates, and a wide network of trusted vendors.
+## Tech Stack
 
-## Business Goals
-- Differentiated Value Proposition & Niche Dominance
-- Deliver Unmatched Customer Experience & Loyalty
-- Superior Operational Efficiency & Cost Advantage
-- Robust & Engaged Partner Ecosystem
+* Java 21
+* Spring Boot 3
+* Spring Data JPA
+* H2 (in-memory)
+* Gradle
 
-### Users/Customers
-Sample user profiles are available in the repository to support development and testing scenarios.
+---
 
-| UserId   | FirstName | LastName|
-|----------|-----------|---------|
-| user101  | John      | Doe     |
+## Running locally
 
-### Stores
-Sample store data seeded for development purposes only.
+If you have the Gradle wrapper (`gradlew`) in your environment, use it:
 
-| StoreId  | OutletName     |
-|----------|----------------|
-| store101 | Fresh Picks    |
-| store102 | Natural Choice |
+```bash
+./gradlew bootRun
+```
 
-### Grocery Products
-Dummy Products for Stores to sell and users to buy from.
+If not, install Gradle (8+) and run:
 
-| ProductId  | ProductName | StoreRefId |
-|------------|-------------|------------|
-| product101 | Wheat Bread | store101   |
-| product102 | Spinach     | store101   |
-| product103 | Crackers    | store101   |
+```bash
+gradle bootRun
+```
+
+App runs on `http://localhost:8080`.
+
+### H2 console
+
+* URL: `http://localhost:8080/h2-console`
+* JDBC URL: `jdbc:h2:mem:foodline`
+* User: `sa`
+* Password: (empty)
+
+> Data is seeded on startup by `DataInitializer`.
+
+---
+
+## Seeded demo data
+
+### User
+| userId |
+|---|
+| `user101` |
+
+### Outlets
+| outletId | outletType | name |
+|---|---|---|
+| `store101` | `GROCERY_STORE` | FreshMart (Store 101) |
+| `store102` | `GROCERY_STORE` | DailyGrocer (Store 102) |
+| `rest201` | `RESTAURANT` | Noodle House (Rest 201) |
+
+### Grocery items (inventory-driven)
+| itemId | outletId | name | unitPrice |
+|---|---|---|---|
+| `g001` | `store101` | Apple | 1.20 |
+| `g002` | `store101` | Milk | 3.50 |
+| `g001_s2` | `store102` | Apple | 1.20 |
+| `g002_s2` | `store102` | Milk | 3.50 |
+
+### Food menu items (menu-driven)
+| itemId | outletId | name | price |
+|---|---|---|---|
+| `f101` | `rest201` | Beef Noodles | 8.90 |
+| `f102` | `rest201` | Fried Dumplings | 5.50 |
+
+---
 
 ## API
 
-Below is a list of API endpoints with their respective input and output. Please note that the application needs to be running for the following endpoints to work. For more information about how to run the application, please refer to run the application section above.
+### Add item to cart (unified)
 
-### Add Product to Cart
 ```http
-POST http://localhost:8080/cart/product
+POST /cart/item
 Content-Type: application/json
 ```
 
-Request Body
+Request body:
+
 ```json
 {
   "userId": "user101",
-  "productId": "product101",
+  "outletId": "store101",
+  "catalogType": "GROCERY",
+  "itemId": "g001",
+  "quantity": 2,
+  "overrideExistingCart": false
+}
+```
+
+If the cart already contains items from another outlet/type and `overrideExistingCart=false`, you’ll get:
+
+* **409 CONFLICT** with `overrideRequired=true`
+
+To proceed, resend the same request with `overrideExistingCart=true`.
+
+Response (200):
+
+```json
+{
+  "cart": {
+    "cartId": "cart_user101",
+    "userId": "user101",
+    "catalogType": "GROCERY",
+    "outlet": { "outletId": "store101", "name": "FreshMart (Store 101)", "outletType": "GROCERY_STORE" },
+    "items": [
+      { "itemId": "g001", "name": "Apple", "unitPrice": 1.2, "quantity": 2, "catalogType": "GROCERY" }
+    ]
+  },
+  "addedItem": { "itemId": "g001", "name": "Apple", "unitPrice": 1.2, "quantity": 2, "catalogType": "GROCERY" }
+}
+```
+
+### View cart
+
+```http
+GET /cart/view?userId=user101
+```
+
+Returns a `CartResponse` (DTO).
+
+### (Legacy) Add product to cart (grocery-only)
+
+```http
+POST /cart/product
+Content-Type: application/json
+```
+
+```json
+{
+  "userId": "user101",
+  "productId": "g001",
   "outletId": "store101"
 }
 ```
 
-Response Body
-```json
-{
-  "cart": {
-    "cartId": "cart101",
-    "outlet": null,
-    "products": [
-      {
-        "productId": "product103",
-        "productName": "Crackers",
-        "mrp": 10.5,
-        "sellingPrice": null,
-        "weight": 500,
-        "expiryDate": 0,
-        "threshold": 10,
-        "availableStock": 30,
-        "discount": null,
-        "store": {
-          "name": "Fresh Picks",
-          "description": null,
-          "outletId": "store101",
-          "inventory": []
-        }
-      }
-    ],
-    "user": null
-  },
-  "product": {
-    "productId": "product103",
-    "productName": "Crackers",
-    "mrp": 10.5,
-    "sellingPrice": null,
-    "weight": 500,
-    "expiryDate": 0,
-    "threshold": 10,
-    "availableStock": 30,
-    "discount": null,
-    "store": {
-      "name": "Fresh Picks",
-      "description": null,
-      "outletId": "store101",
-      "inventory": []
-    }
-  },
-  "sellingPrice": null
-}
-```
+> Kept for backwards compatibility.
 
-### View Cart
+---
+
+## Orders
+
+### Checkout
+
 ```http
-GET http://localhost:8080/cart/view?userId=user101
+POST /order/checkout?userId=user101
 ```
 
-Response Body
-```json
-{
-    "cartId": "cart101",
-    "outlet": null,
-    "products": [
-        {
-            "productId": "product101",
-            "productName": "Wheat Bread",
-            "mrp": 10.5,
-            "sellingPrice": null,
-            "weight": 500.0,
-            "expiryDate": 0,
-            "threshold": 10,
-            "availableStock": 30,
-            "discount": null,
-            "store": {
-                "name": "Fresh Picks",
-                "description": null,
-                "outletId": "store101",
-                "inventory": []
-            }
-        }
-    ],
-    "user": null
-}
-```
+Creates an order from the cart, assigns fulfillment outlet, performs fulfillment, then clears the cart.
 
-### Inventory Health
+### Get order by id
+
 ```http
-GET http://localhost:8080/inventory/health?storeId=<storeid>
+GET /order/{orderId}
 ```
 
-Response Body 
-```json lines
-{
-    "headers": {},
-    "body": null
-}
+Returns `OrderResponse`.
+
+### List orders
+
+```http
+GET /order
+GET /order?userId=user101
 ```
 
-## Tech Requirements
-The project requires Java 21. If you have multiple JVMs on your machine, you might want to 
-consider using a tool such as [sdkman](https://sdkman.io/) to handle switching between versions.
+Returns `List<OrderSummaryResponse>` (lightweight list view).
 
-The project makes use of Gradle and uses the Gradle wrapper, which means you don't need Gradle installed.
+---
 
-### Installing Java
+## Useful Gradle commands
 
-Install java using homeBrew
-```console
-brew install openjdk@21
-```
-
-Installing java on Windows, [refer](https://www.java.com/en/download/help/windows_manual_download.html#xd_co_f=NzA3YTZmNzAtOTEzMS00OWFiLTk2NjUtODg0NjNhMjRhMjkw~)
-
-Other ways to Download and install java, [refer](https://www.oracle.com/in/java/technologies/downloads/#java24).
-
-#### Verify Java Version Installed
-```console
-java -version
-```
-
-### Useful Gradle commands
-#### Build the project
-Compiles the project, runs the test and then creates an executable JAR file
 ```bash
-$ ./gradlew build
+./gradlew test
+./gradlew build
+./gradlew bootRun
 ```
 
-#### Run the application
-Run the application which will be listening on port ```8080```.
-```bash
-$ ./gradlew bootRun
-```
+Or, without the wrapper:
 
-Run the application using Java and the executable JAR file produced by the Gradle ```build``` task. The application will be listening on port ```8080```.
 ```bash
-$ java -jar  build/libs/foodline-java.jar
-```
-
-#### Run the tests
-There are two types of tests, the unit tests and the functional tests. These can be executed as follows.
-
-* Run unit tests only
-```bash
-$ ./gradlew test
-```
-* Run both unit and functional tests
-```bash
-$ ./gradlew check
-```
-#### List all Gradle tasks
-List all the tasks that Gradle can run, such as ```build ``` and ```test```.
-```bash
-$ ./gradlew tasks
+gradle test
+gradle build
+gradle bootRun
 ```
